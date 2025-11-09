@@ -87,13 +87,14 @@ export default function Dashboard() {
     safeClearCycle();
 
     try {
-      const { response, data } = await requestEsp32<{ error?: string }>("/api/start", {
+      const { response, data } = await requestEsp32("/api/start", {
         method: "POST",
       });
 
       if (!response.ok) {
+        const payload = (data as { error?: string } | null) ?? null;
         throw Object.assign(
-          new Error((data as any)?.error ?? `Error ${response.status}`),
+          new Error(payload?.error ?? `Error ${response.status}`),
           { response }
         );
       }
@@ -129,13 +130,14 @@ export default function Dashboard() {
     if (!isRunning) return;
 
     try {
-      const { response, data } = await requestEsp32<{ error?: string }>("/api/stop", {
+      const { response, data } = await requestEsp32("/api/stop", {
         method: "POST",
       });
 
       if (!response.ok) {
+        const payload = (data as { error?: string } | null) ?? null;
         throw Object.assign(
-          new Error((data as any)?.error ?? `Error ${response.status}`),
+          new Error(payload?.error ?? `Error ${response.status}`),
           { response }
         );
       }
@@ -179,10 +181,14 @@ export default function Dashboard() {
 
   const getStateColor = (state: TrafficState) => {
     switch (state) {
-      case "RED": return "bg-red-500";
-      case "YELLOW": return "bg-yellow-500";
-      case "GREEN": return "bg-green-500";
-      default: return "bg-gray-500";
+      case "RED":
+        return "bg-red-500";
+      case "YELLOW":
+        return "bg-yellow-500";
+      case "GREEN":
+        return "bg-green-500";
+      default:
+        return "bg-gray-500";
     }
   };
 
