@@ -1,4 +1,3 @@
-// ...existing code...
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Link } from "react-router-dom";
@@ -18,26 +17,21 @@ export default function Home() {
               Plataforma IoT de alto nivel de ciberseguridad para la gestión y monitoreo de semáforos
             </p>
 
-            <aside className="w-full lg:w-56 flex justify">
-            <div className="flex flex-col gap-3">
-              <Button size="sm" asChild>
-                <Link to="/auth" className="flex items-center">
-                  <LogIn className="mr-2 h-4 w-4" /> Iniciar sesión
-                </Link>
-              </Button>
-            </div>
-            <div className="flex flex-col gap-3 ms-2">
-            <Button size="sm" variant="outline" asChild>
-                <Link to="/contacts" className="flex items-center">
-                  <Info className="mr-2 h-4 w-4" /> Más información
-                </Link>
-              </Button>
+            <aside className="w-full lg:w-56 flex">
+              <div className="flex flex-1 flex-col gap-3">
+                <Button size="sm" asChild>
+                  <Link to="/auth" className="flex items-center">
+                    <LogIn className="mr-2 h-4 w-4" /> Iniciar sesión
+                  </Link>
+                </Button>
+                <Button size="sm" variant="outline" asChild>
+                  <Link to="/contacts" className="flex items-center">
+                    <Info className="mr-2 h-4 w-4" /> Más información
+                  </Link>
+                </Button>
               </div>
-          </aside>
+            </aside>
           </div>
-
-        
-          
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-16">
@@ -121,4 +115,3 @@ export default function Home() {
     </div>
   );
 }
-// ...existing code...

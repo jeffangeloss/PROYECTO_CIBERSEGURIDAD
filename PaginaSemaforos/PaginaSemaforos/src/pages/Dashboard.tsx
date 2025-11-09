@@ -1,4 +1,3 @@
-// ...existing code...
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
@@ -20,6 +19,32 @@ import { API_BASE_URL, describeApiError, requestEsp32 } from "@/lib/api";
 
 type TrafficState = "RED" | "YELLOW" | "GREEN" | "OFF";
 
+interface StatusPayload {
+  running?: boolean;
+  state?: string;
+  time?: string;
+}
+
+const trafficStateMap: Record<string, TrafficState> = {
+  RED: "RED",
+  ROJO: "RED",
+  GREEN: "GREEN",
+  VERDE: "GREEN",
+  YELLOW: "YELLOW",
+  AMARILLO: "YELLOW",
+  OFF: "OFF",
+  APAGADO: "OFF",
+};
+
+const normalizeTrafficState = (value: unknown): TrafficState | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toUpperCase();
+  return trafficStateMap[normalized] ?? null;
+};
+
+const formatLocalTime = () =>
+  new Date().toLocaleTimeString("es-ES", { hour12: false });
+
 export default function Dashboard() {
   const { user, loading, signOut } = useAuth();
   const navigate = useNavigate();
@@ -29,168 +54,131 @@ export default function Dashboard() {
 
   const [trafficState, setTrafficState] = useState<TrafficState>("OFF");
   const [isRunning, setIsRunning] = useState(false);
-  const [currentTime, setCurrentTime] = useState(new Date().toISOString());
+  const [espTime, setEspTime] = useState<string | null>(null);
+  const [localTime, setLocalTime] = useState(() => formatLocalTime());
   const [connectionStatus, setConnectionStatus] = useState<"connected" | "disconnected">("disconnected");
   const cycleRef = useRef<number | null>(null);
   const isCheckingStatus = useRef(false);
 
-  const safeClearCycle = () => {
+  const safeClearCycle = useCallback(() => {
     if (cycleRef.current !== null) {
       clearInterval(cycleRef.current);
       cycleRef.current = null;
     }
-  };
+  }, []);
+
+  const startLocalCycle = useCallback(
+    (initialState: TrafficState = "GREEN") => {
+      safeClearCycle();
+
+      let state = initialState === "OFF" ? "GREEN" : initialState;
+      setTrafficState(state);
+
+      cycleRef.current = window.setInterval(() => {
+        state = state === "GREEN" ? "YELLOW" : state === "YELLOW" ? "RED" : "GREEN";
+        setTrafficState(state);
+      }, 3000);
+    },
+    [safeClearCycle],
+  );
 
   const checkStatus = useCallback(async () => {
     if (isCheckingStatus.current) return;
     isCheckingStatus.current = true;
     try {
-      const { response } = await requestEsp32("/api/status", {
+      const { response, data } = await requestEsp32<StatusPayload>("/api/status", {
         failOnBadGateway: true,
       });
-      if (!response.ok) {
-        throw Object.assign(new Error(`Status ${response.status}`), { response });
-      }
-      const response = await fetch("/api/status", {
-        headers: { "Accept": "application/json" },
-      });
-      if (!response.ok) {
-        throw new Error(`Status ${response.status}`);
-      }
-      await response.json().catch(() => null);
+      if (!response.ok) throw Object.assign(new Error(`Status ${response.status}`), { response });
+
       setConnectionStatus("connected");
+
+      const payload: StatusPayload = (data ?? {}) as StatusPayload;
+
+      if (typeof payload.time === "string" && payload.time.trim() !== "") {
+        setEspTime(payload.time);
+      }
+
+      if (typeof payload.running === "boolean") {
+        setIsRunning(payload.running);
+        if (!payload.running) {
+          safeClearCycle();
+          setTrafficState("OFF");
+        }
+      }
+
+      const normalizedState = normalizeTrafficState(payload.state);
+      if (payload.running) {
+        const stateToApply = normalizedState && normalizedState !== "OFF" ? normalizedState : "GREEN";
+        setTrafficState(stateToApply);
+        if (cycleRef.current === null) startLocalCycle(stateToApply);
+      } else if (normalizedState === "OFF") {
+        setTrafficState("OFF");
+      }
     } catch (error) {
       console.error("Error comprobando estado del ESP32", error);
       setConnectionStatus("disconnected");
+      setEspTime(null);
     } finally {
       isCheckingStatus.current = false;
     }
-  }, []);
+  }, [safeClearCycle, startLocalCycle]);
 
   // Redirigir si no hay usuario
   useEffect(() => {
-    if (!loading && !user) {
-      navigate("/auth");
-    }
+    if (!loading && !user) navigate("/auth");
   }, [user, loading, navigate]);
 
   // Limpiar intervalo del semáforo al desmontar
-  useEffect(() => {
-    return () => {
-      safeClearCycle();
-    };
-  }, []);
+  useEffect(() => () => safeClearCycle(), [safeClearCycle]);
 
-  // Actualizar reloj cada segundo
+  // Actualizar reloj local cada segundo
   useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentTime(new Date().toISOString());
-    }, 1000);
-    return () => clearInterval(interval);
+    const interval = window.setInterval(() => setLocalTime(formatLocalTime()), 1000);
+    return () => window.clearInterval(interval);
   }, []);
 
   const handleStart = async () => {
-    if (isRunning) return; // ya está en marcha
-
+    if (isRunning) return;
     safeClearCycle();
-
     try {
-      const { response, data } = await requestEsp32<{ error?: string }>("/api/start", {
-        method: "POST",
-      });
-
+      const { response, data } = await requestEsp32("/api/start", { method: "POST" });
       if (!response.ok) {
-        throw Object.assign(
-          new Error((data as any)?.error ?? `Error ${response.status}`),
-          { response }
-        );
+        const payload = (data as { error?: string } | null) ?? null;
+        throw Object.assign(new Error(payload?.error ?? `Error ${response.status}`), { response });
       }
-
       setIsRunning(true);
       setConnectionStatus("connected");
-      toast({
-        title: "Sistema iniciado",
-        description: "Semáforo en operación",
-      });
-
-      const response = await fetch("/api/start", {
-        method: "POST",
-        headers: { "Accept": "application/json" },
-      });
-
-      if (!response.ok) {
-        const errorBody = await response.json().catch(() => ({}));
-        throw new Error(errorBody?.error ?? `Error ${response.status}`);
-      }
-
-      setIsRunning(true);
-      setConnectionStatus("connected");
-      toast({
-        title: "Sistema iniciado",
-        description: "Semáforo en operación",
-      });
-
-      // Estado inicial
-      let state: TrafficState = "GREEN";
-      setTrafficState(state);
-
-      // Guardar id del intervalo para poder detenerlo después
-      cycleRef.current = window.setInterval(() => {
-        state = state === "GREEN" ? "YELLOW" : state === "YELLOW" ? "RED" : "GREEN";
-        setTrafficState(state);
-      }, 3000);
+      toast({ title: "Sistema iniciado", description: "Semáforo en operación" });
+      startLocalCycle("GREEN");
+      // sincroniza estado real
+      checkStatus();
     } catch (error) {
       console.error("No se pudo iniciar el semáforo", error);
       setConnectionStatus("disconnected");
-      toast({
-        title: "Fallo al iniciar",
-        description: describeApiError(error),
-        description: "No se pudo contactar con el ESP32.",
-        variant: "destructive",
-      });
+      toast({ title: "Fallo al iniciar", description: describeApiError(error), variant: "destructive" });
     }
   };
 
   const handleStop = async () => {
     if (!isRunning) return;
-
     try {
-      const { response, data } = await requestEsp32<{ error?: string }>("/api/stop", {
-        method: "POST",
-      });
-
+      const { response, data } = await requestEsp32("/api/stop", { method: "POST" });
       if (!response.ok) {
-        throw Object.assign(
-          new Error((data as any)?.error ?? `Error ${response.status}`),
-          { response }
-        );
-      const response = await fetch("/api/stop", {
-        method: "POST",
-        headers: { "Accept": "application/json" },
-      });
-
-      if (!response.ok) {
-        const errorBody = await response.json().catch(() => ({}));
-        throw new Error(errorBody?.error ?? `Error ${response.status}`);
+        const payload = (data as { error?: string } | null) ?? null;
+        throw Object.assign(new Error(payload?.error ?? `Error ${response.status}`), { response });
       }
-
       safeClearCycle();
       setIsRunning(false);
       setTrafficState("OFF");
-      setConnectionStatus("disconnected");
-      toast({
-        title: "Sistema detenido",
-        description: "Semáforo fuera de servicio",
-        variant: "destructive",
-      });
+      // seguimos conectados al ESP32 aunque el ciclo esté detenido
+      setConnectionStatus("connected");
+      toast({ title: "Sistema detenido", description: "Semáforo fuera de servicio", variant: "destructive" });
+      // sincroniza estado real
+      checkStatus();
     } catch (error) {
       console.error("No se pudo detener el semáforo", error);
-      toast({
-        title: "Fallo al detener",
-        description: describeApiError(error),
-        description: "No se pudo contactar con el ESP32.",
-        variant: "destructive",
-      });
+      toast({ title: "Fallo al detener", description: describeApiError(error), variant: "destructive" });
     }
   };
 
@@ -198,17 +186,10 @@ export default function Dashboard() {
     if (!confirm("¿Cerrar sesión?")) return;
     try {
       await signOut();
-      toast({
-        title: "Sesión cerrada",
-        description: "Has salido del sistema",
-      });
+      toast({ title: "Sesión cerrada", description: "Has salido del sistema" });
       navigate("/auth");
     } catch {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "No se pudo cerrar la sesión",
-      });
+      toast({ variant: "destructive", title: "Error", description: "No se pudo cerrar la sesión" });
     }
   };
 
@@ -241,7 +222,6 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-background">
       <div className="container mx-auto px-4 py-8">
-       
         <div className="mb-8 flex items-start justify-between gap-4">
           <div>
             <h1 className="text-4xl font-bold mb-2">Sala de Control de Semáforos</h1>
@@ -283,7 +263,7 @@ export default function Dashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm font-mono">{currentTime}</p>
+              <p className="text-sm font-mono">{espTime ?? localTime}</p>
             </CardContent>
           </Card>
 
@@ -321,20 +301,11 @@ export default function Dashboard() {
                 </div>
 
                 <div className="flex gap-4 w-full">
-                  <Button
-                    onClick={handleStart}
-                    disabled={isRunning}
-                    className="flex-1"
-                  >
+                  <Button onClick={handleStart} disabled={isRunning} className="flex-1">
                     <Play className="mr-2 h-4 w-4" />
                     Iniciar
                   </Button>
-                  <Button
-                    onClick={handleStop}
-                    disabled={!isRunning}
-                    variant="destructive"
-                    className="flex-1"
-                  >
+                  <Button onClick={handleStop} disabled={!isRunning} variant="destructive" className="flex-1">
                     <Square className="mr-2 h-4 w-4" />
                     Detener
                   </Button>
@@ -354,22 +325,17 @@ export default function Dashboard() {
               <CardContent className="space-y-2">
                 <div className="p-3 bg-muted rounded-lg">
                   <p className="text-sm font-mono text-muted-foreground">
-                    GET /time - Obtener tiempo actual (JSON)
+                    GET /api/status — Estado actual (JSON)
                   </p>
                 </div>
                 <div className="p-3 bg-muted rounded-lg">
                   <p className="text-sm font-mono text-muted-foreground">
-                    GET /settime?iso=YYYY-MM-DDTHH:MM:SS
+                    POST /api/start — Iniciar semáforo
                   </p>
                 </div>
                 <div className="p-3 bg-muted rounded-lg">
                   <p className="text-sm font-mono text-muted-foreground">
-                    GET /start - Iniciar semáforo
-                  </p>
-                </div>
-                <div className="p-3 bg-muted rounded-lg">
-                  <p className="text-sm font-mono text-muted-foreground">
-                    GET /stop - Detener semáforo
+                    POST /api/stop — Detener semáforo
                   </p>
                 </div>
               </CardContent>
@@ -384,9 +350,8 @@ export default function Dashboard() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-2 text-sm text-muted-foreground">
-                  <p>✓ Conexión HTTPS segura</p>
+                  <p>✓ Conexión segura de sesión (app)</p>
                   <p>✓ Autenticación de usuario activa</p>
-                  <p>✓ Comunicación cifrada ESP32</p>
                   <p>✓ Proyecto académico de ciberseguridad</p>
                 </div>
               </CardContent>
@@ -394,7 +359,6 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Botón simple que redirige a la página Defacement */}
         <div className="mt-6 flex justify-center">
           <Button variant="destructive" onClick={() => navigate("/defacement")}>
             Defacement
@@ -404,4 +368,3 @@ export default function Dashboard() {
     </div>
   );
 }
-// ...existing code...
