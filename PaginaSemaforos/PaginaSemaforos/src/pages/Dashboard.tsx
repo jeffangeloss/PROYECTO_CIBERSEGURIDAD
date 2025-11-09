@@ -1,5 +1,5 @@
 // ...existing code...
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import {
-  CircleDot,
   Play,
   Square,
   Clock,
@@ -29,8 +28,35 @@ export default function Dashboard() {
   const [isRunning, setIsRunning] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date().toISOString());
   const [connectionStatus, setConnectionStatus] = useState<"connected" | "disconnected">("disconnected");
-
   const cycleRef = useRef<number | null>(null);
+  const isCheckingStatus = useRef(false);
+
+  const safeClearCycle = () => {
+    if (cycleRef.current !== null) {
+      clearInterval(cycleRef.current);
+      cycleRef.current = null;
+    }
+  };
+
+  const checkStatus = useCallback(async () => {
+    if (isCheckingStatus.current) return;
+    isCheckingStatus.current = true;
+    try {
+      const response = await fetch("/api/status", {
+        headers: { "Accept": "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(`Status ${response.status}`);
+      }
+      await response.json().catch(() => null);
+      setConnectionStatus("connected");
+    } catch (error) {
+      console.error("Error comprobando estado del ESP32", error);
+      setConnectionStatus("disconnected");
+    } finally {
+      isCheckingStatus.current = false;
+    }
+  }, []);
 
   // Redirigir si no hay usuario
   useEffect(() => {
@@ -42,10 +68,7 @@ export default function Dashboard() {
   // Limpiar intervalo del semáforo al desmontar
   useEffect(() => {
     return () => {
-      if (cycleRef.current !== null) {
-        clearInterval(cycleRef.current);
-        cycleRef.current = null;
-      }
+      safeClearCycle();
     };
   }, []);
 
@@ -57,65 +80,97 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, []);
 
-  const handleStart = () => {
+  const handleStart = async () => {
     if (isRunning) return; // ya está en marcha
 
-    // Asegurar que no haya intervalos previos
-    if (cycleRef.current !== null) {
-      clearInterval(cycleRef.current);
-      cycleRef.current = null;
-    }
+    safeClearCycle();
 
-    setIsRunning(true);
-    setConnectionStatus("connected");
-    toast({
-      title: "Sistema iniciado",
-      description: "Semáforo en operación",
-    });
+    try {
+      const response = await fetch("/api/start", {
+        method: "POST",
+        headers: { "Accept": "application/json" },
+      });
 
-    // Estado inicial
-    let state: TrafficState = "GREEN";
-    setTrafficState(state);
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody?.error ?? `Error ${response.status}`);
+      }
 
-    // Guardar id del intervalo para poder detenerlo después
-    cycleRef.current = window.setInterval(() => {
-      state = state === "GREEN" ? "YELLOW" : state === "YELLOW" ? "RED" : "GREEN";
+      setIsRunning(true);
+      setConnectionStatus("connected");
+      toast({
+        title: "Sistema iniciado",
+        description: "Semáforo en operación",
+      });
+
+      // Estado inicial
+      let state: TrafficState = "GREEN";
       setTrafficState(state);
-    }, 3000);
-  };
 
-  const handleStop = () => {
-    // Detener intervalo si existe
-    if (cycleRef.current !== null) {
-      clearInterval(cycleRef.current);
-      cycleRef.current = null;
+      // Guardar id del intervalo para poder detenerlo después
+      cycleRef.current = window.setInterval(() => {
+        state = state === "GREEN" ? "YELLOW" : state === "YELLOW" ? "RED" : "GREEN";
+        setTrafficState(state);
+      }, 3000);
+    } catch (error) {
+      console.error("No se pudo iniciar el semáforo", error);
+      setConnectionStatus("disconnected");
+      toast({
+        title: "Fallo al iniciar",
+        description: "No se pudo contactar con el ESP32.",
+        variant: "destructive",
+      });
     }
-
-    setIsRunning(false);
-    setTrafficState("OFF");
-    setConnectionStatus("disconnected");
-    toast({
-      title: "Sistema detenido",
-      description: "Semáforo fuera de servicio",
-      variant: "destructive",
-    });
   };
 
- const handleSignOut = async () => {
+  const handleStop = async () => {
+    if (!isRunning) return;
+
+    try {
+      const response = await fetch("/api/stop", {
+        method: "POST",
+        headers: { "Accept": "application/json" },
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody?.error ?? `Error ${response.status}`);
+      }
+
+      safeClearCycle();
+      setIsRunning(false);
+      setTrafficState("OFF");
+      setConnectionStatus("disconnected");
+      toast({
+        title: "Sistema detenido",
+        description: "Semáforo fuera de servicio",
+        variant: "destructive",
+      });
+    } catch (error) {
+      console.error("No se pudo detener el semáforo", error);
+      toast({
+        title: "Fallo al detener",
+        description: "No se pudo contactar con el ESP32.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSignOut = async () => {
     if (!confirm("¿Cerrar sesión?")) return;
     try {
-     await signOut();
-     toast({
-       title: "Sesión cerrada",
+      await signOut();
+      toast({
+        title: "Sesión cerrada",
         description: "Has salido del sistema",
       });
       navigate("/auth");
     } catch {
       toast({
-       variant: "destructive",
+        variant: "destructive",
         title: "Error",
         description: "No se pudo cerrar la sesión",
-     });
+      });
     }
   };
 
@@ -127,6 +182,12 @@ export default function Dashboard() {
       default: return "bg-gray-500";
     }
   };
+
+  useEffect(() => {
+    checkStatus();
+    const interval = window.setInterval(checkStatus, 10000);
+    return () => window.clearInterval(interval);
+  }, [checkStatus]);
 
   if (loading) {
     return (
