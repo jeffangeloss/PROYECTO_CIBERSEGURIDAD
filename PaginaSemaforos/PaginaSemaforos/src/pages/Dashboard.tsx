@@ -19,6 +19,34 @@ import { API_BASE_URL, describeApiError, requestEsp32 } from "@/lib/api";
 
 type TrafficState = "RED" | "YELLOW" | "GREEN" | "OFF";
 
+interface StatusPayload {
+  running?: boolean;
+  state?: string;
+  time?: string;
+}
+
+const trafficStateMap: Record<string, TrafficState> = {
+  RED: "RED",
+  ROJO: "RED",
+  GREEN: "GREEN",
+  VERDE: "GREEN",
+  YELLOW: "YELLOW",
+  AMARILLO: "YELLOW",
+  OFF: "OFF",
+  APAGADO: "OFF",
+};
+
+const normalizeTrafficState = (value: unknown): TrafficState | null => {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toUpperCase();
+  return trafficStateMap[normalized] ?? null;
+};
+
+const formatLocalTime = () =>
+  new Date().toLocaleTimeString("es-ES", {
+    hour12: false,
+  });
+
 export default function Dashboard() {
   const { user, loading, signOut } = useAuth();
   const navigate = useNavigate();
@@ -28,36 +56,78 @@ export default function Dashboard() {
 
   const [trafficState, setTrafficState] = useState<TrafficState>("OFF");
   const [isRunning, setIsRunning] = useState(false);
-  const [currentTime, setCurrentTime] = useState(new Date().toISOString());
+  const [espTime, setEspTime] = useState<string | null>(null);
+  const [localTime, setLocalTime] = useState(() => formatLocalTime());
   const [connectionStatus, setConnectionStatus] = useState<"connected" | "disconnected">("disconnected");
   const cycleRef = useRef<number | null>(null);
   const isCheckingStatus = useRef(false);
 
-  const safeClearCycle = () => {
+  const safeClearCycle = useCallback(() => {
     if (cycleRef.current !== null) {
       clearInterval(cycleRef.current);
       cycleRef.current = null;
     }
-  };
+  }, []);
+
+  const startLocalCycle = useCallback(
+    (initialState: TrafficState = "GREEN") => {
+      safeClearCycle();
+
+      let state = initialState === "OFF" ? "GREEN" : initialState;
+      setTrafficState(state);
+
+      cycleRef.current = window.setInterval(() => {
+        state = state === "GREEN" ? "YELLOW" : state === "YELLOW" ? "RED" : "GREEN";
+        setTrafficState(state);
+      }, 3000);
+    },
+    [safeClearCycle],
+  );
 
   const checkStatus = useCallback(async () => {
     if (isCheckingStatus.current) return;
     isCheckingStatus.current = true;
     try {
-      const { response } = await requestEsp32("/api/status", {
+      const { response, data } = await requestEsp32<StatusPayload>("/api/status", {
         failOnBadGateway: true,
       });
       if (!response.ok) {
         throw Object.assign(new Error(`Status ${response.status}`), { response });
       }
       setConnectionStatus("connected");
+
+      const payload: StatusPayload = (data ?? {}) as StatusPayload;
+
+      if (typeof payload.time === "string" && payload.time.trim() !== "") {
+        setEspTime(payload.time);
+      }
+
+      if (typeof payload.running === "boolean") {
+        setIsRunning(payload.running);
+        if (!payload.running) {
+          safeClearCycle();
+          setTrafficState("OFF");
+        }
+      }
+
+      const normalizedState = normalizeTrafficState(payload.state);
+      if (payload.running) {
+        const stateToApply = normalizedState && normalizedState !== "OFF" ? normalizedState : "GREEN";
+        setTrafficState(stateToApply);
+        if (cycleRef.current === null) {
+          startLocalCycle(stateToApply);
+        }
+      } else if (normalizedState === "OFF") {
+        setTrafficState("OFF");
+      }
     } catch (error) {
       console.error("Error comprobando estado del ESP32", error);
       setConnectionStatus("disconnected");
+      setEspTime(null);
     } finally {
       isCheckingStatus.current = false;
     }
-  }, []);
+  }, [safeClearCycle, startLocalCycle]);
 
   // Redirigir si no hay usuario
   useEffect(() => {
@@ -71,14 +141,14 @@ export default function Dashboard() {
     return () => {
       safeClearCycle();
     };
-  }, []);
+  }, [safeClearCycle]);
 
   // Actualizar reloj cada segundo
   useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentTime(new Date().toISOString());
+    const interval = window.setInterval(() => {
+      setLocalTime(formatLocalTime());
     }, 1000);
-    return () => clearInterval(interval);
+    return () => window.clearInterval(interval);
   }, []);
 
   const handleStart = async () => {
@@ -106,15 +176,7 @@ export default function Dashboard() {
         description: "Semáforo en operación",
       });
 
-      // Estado inicial
-      let state: TrafficState = "GREEN";
-      setTrafficState(state);
-
-      // Guardar id del intervalo para poder detenerlo después
-      cycleRef.current = window.setInterval(() => {
-        state = state === "GREEN" ? "YELLOW" : state === "YELLOW" ? "RED" : "GREEN";
-        setTrafficState(state);
-      }, 3000);
+      startLocalCycle("GREEN");
     } catch (error) {
       console.error("No se pudo iniciar el semáforo", error);
       setConnectionStatus("disconnected");
@@ -146,6 +208,7 @@ export default function Dashboard() {
       setIsRunning(false);
       setTrafficState("OFF");
       setConnectionStatus("disconnected");
+      setEspTime(null);
       toast({
         title: "Sistema detenido",
         description: "Semáforo fuera de servicio",
@@ -254,7 +317,7 @@ export default function Dashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm font-mono">{currentTime}</p>
+              <p className="text-sm font-mono">{espTime ?? localTime}</p>
             </CardContent>
           </Card>
 
