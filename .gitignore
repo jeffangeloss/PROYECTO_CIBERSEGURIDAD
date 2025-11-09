@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+env/
+# Node
+node_modules/
+dist/
+build/
+# IDE / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+# Logs
+*.log
+# ZIPs y binarios grandes (si no quieres subirlos)
+*.zip
+*.exe
+*.iso
+*.img
