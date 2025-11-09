@@ -51,6 +51,13 @@ export default function Dashboard() {
       if (!response.ok) {
         throw Object.assign(new Error(`Status ${response.status}`), { response });
       }
+      const response = await fetch("/api/status", {
+        headers: { "Accept": "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(`Status ${response.status}`);
+      }
+      await response.json().catch(() => null);
       setConnectionStatus("connected");
     } catch (error) {
       console.error("Error comprobando estado del ESP32", error);
@@ -106,6 +113,23 @@ export default function Dashboard() {
         description: "Semáforo en operación",
       });
 
+      const response = await fetch("/api/start", {
+        method: "POST",
+        headers: { "Accept": "application/json" },
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody?.error ?? `Error ${response.status}`);
+      }
+
+      setIsRunning(true);
+      setConnectionStatus("connected");
+      toast({
+        title: "Sistema iniciado",
+        description: "Semáforo en operación",
+      });
+
       // Estado inicial
       let state: TrafficState = "GREEN";
       setTrafficState(state);
@@ -121,6 +145,7 @@ export default function Dashboard() {
       toast({
         title: "Fallo al iniciar",
         description: describeApiError(error),
+        description: "No se pudo contactar con el ESP32.",
         variant: "destructive",
       });
     }
@@ -139,6 +164,14 @@ export default function Dashboard() {
           new Error((data as any)?.error ?? `Error ${response.status}`),
           { response }
         );
+      const response = await fetch("/api/stop", {
+        method: "POST",
+        headers: { "Accept": "application/json" },
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody?.error ?? `Error ${response.status}`);
       }
 
       safeClearCycle();
@@ -155,6 +188,7 @@ export default function Dashboard() {
       toast({
         title: "Fallo al detener",
         description: describeApiError(error),
+        description: "No se pudo contactar con el ESP32.",
         variant: "destructive",
       });
     }
