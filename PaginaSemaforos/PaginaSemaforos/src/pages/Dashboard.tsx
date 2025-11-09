@@ -16,6 +16,7 @@ import {
   AlertCircle,
   LogOut
 } from "lucide-react";
+import { API_BASE_URL, describeApiError, requestEsp32 } from "@/lib/api";
 
 type TrafficState = "RED" | "YELLOW" | "GREEN" | "OFF";
 
@@ -23,6 +24,8 @@ export default function Dashboard() {
   const { user, loading, signOut } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+
+  const apiTarget = API_BASE_URL || (typeof window !== "undefined" ? window.location.origin : "");
 
   const [trafficState, setTrafficState] = useState<TrafficState>("OFF");
   const [isRunning, setIsRunning] = useState(false);
@@ -42,6 +45,12 @@ export default function Dashboard() {
     if (isCheckingStatus.current) return;
     isCheckingStatus.current = true;
     try {
+      const { response } = await requestEsp32("/api/status", {
+        failOnBadGateway: true,
+      });
+      if (!response.ok) {
+        throw Object.assign(new Error(`Status ${response.status}`), { response });
+      }
       const response = await fetch("/api/status", {
         headers: { "Accept": "application/json" },
       });
@@ -86,6 +95,24 @@ export default function Dashboard() {
     safeClearCycle();
 
     try {
+      const { response, data } = await requestEsp32<{ error?: string }>("/api/start", {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        throw Object.assign(
+          new Error((data as any)?.error ?? `Error ${response.status}`),
+          { response }
+        );
+      }
+
+      setIsRunning(true);
+      setConnectionStatus("connected");
+      toast({
+        title: "Sistema iniciado",
+        description: "Semáforo en operación",
+      });
+
       const response = await fetch("/api/start", {
         method: "POST",
         headers: { "Accept": "application/json" },
@@ -117,6 +144,7 @@ export default function Dashboard() {
       setConnectionStatus("disconnected");
       toast({
         title: "Fallo al iniciar",
+        description: describeApiError(error),
         description: "No se pudo contactar con el ESP32.",
         variant: "destructive",
       });
@@ -127,6 +155,15 @@ export default function Dashboard() {
     if (!isRunning) return;
 
     try {
+      const { response, data } = await requestEsp32<{ error?: string }>("/api/stop", {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        throw Object.assign(
+          new Error((data as any)?.error ?? `Error ${response.status}`),
+          { response }
+        );
       const response = await fetch("/api/stop", {
         method: "POST",
         headers: { "Accept": "application/json" },
@@ -150,6 +187,7 @@ export default function Dashboard() {
       console.error("No se pudo detener el semáforo", error);
       toast({
         title: "Fallo al detener",
+        description: describeApiError(error),
         description: "No se pudo contactar con el ESP32.",
         variant: "destructive",
       });
@@ -231,6 +269,9 @@ export default function Dashboard() {
               <Badge variant={connectionStatus === "connected" ? "default" : "secondary"}>
                 {connectionStatus === "connected" ? "Conectado" : "Desconectado"}
               </Badge>
+              <p className="mt-2 text-xs text-muted-foreground break-all">
+                Objetivo API: {apiTarget}
+              </p>
             </CardContent>
           </Card>
 
